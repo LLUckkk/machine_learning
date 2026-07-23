@@ -1,5 +1,6 @@
 import os
 import random
+from typing import List
 
 import numpy as np
 import torch
@@ -9,93 +10,57 @@ from torchvision import datasets, transforms
 
 
 def set_seed(seed: int = 42) -> None:
-    """固定随机种子，方便复现实验结果。"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
 
-class LeNet(nn.Module):
+class MLP(nn.Module):  # pytorch中，自定义神经网络通常都要继承nn.Module
     """
-    一个经典的 LeNet 风格卷积神经网络。
-
-    输入：
-        (batch_size, 1, 28, 28)
-
+    使用多层感知机识别 MNIST 手写数字。
+    输入图像：
+    (batch_size, 1, 28, 28)
+    展开后：
+    (batch_size, 784)
     网络结构：
-        卷积 -> ReLU -> 池化
-        卷积 -> ReLU -> 池化
-        全连接 -> ReLU
-        全连接 -> 10个类别得分
+    784 -> 256 -> 128 -> 10
     """
 
     def __init__(self) -> None:
         super().__init__()
 
-        self.features = nn.Sequential(
-            # 输入：(N, 1, 28, 28)
-            nn.Conv2d(
-                in_channels=1,
-                out_channels=6,
-                kernel_size=5,
-                stride=1,
-                padding=2,
-            ),
-            # 输出：(N, 6, 28, 28)
-            nn.ReLU(),
+        self.network = nn.Sequential( # 输入按照从上到下的顺序依次经过这些网络层
+            nn.Flatten(),  # 经过flatten之后图片从二维变成一维了
+            # 现在是64, 28*28.其中64是batch_size
 
-            nn.MaxPool2d(
-                kernel_size=2,
-                stride=2,
+            nn.Linear(
+                in_features=28 * 28,
+                out_features=256,
             ),
-            # 输出：(N, 6, 14, 14)
+            # nn.ReLU(),
+            nn.Sigmoid(),
 
-            nn.Conv2d(
-                in_channels=6,
-                out_channels=16,
-                kernel_size=5,
-                stride=1,
-                padding=0,
+            nn.Linear(
+                in_features=256,
+                out_features=128,
             ),
-            # 输出：(N, 16, 10, 10)
-            nn.ReLU(),
+            # nn.ReLU(),
+            nn.Sigmoid(),
 
-            nn.MaxPool2d(
-                kernel_size=2,
-                stride=2,
+            nn.Linear(
+                in_features=128,
+                out_features=10,
             ),
-            # 输出：(N, 16, 5, 5)
         )
 
-        self.classifier = nn.Sequential(
-            # 16 × 5 × 5 = 400
-            nn.Linear(16 * 5 * 5, 120),
-            nn.ReLU(),
-
-            nn.Linear(120, 84),
-            nn.ReLU(),
-
-            nn.Linear(84, 10),
-        )
-
+    # 该函数定义数据如何在网络中传播。比如: model(image),实际调用的是model.forward(image)
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        前向传播。
-
-        返回值不是概率，而是10个类别对应的原始得分 logits。
+        返回10个类别对应得分
         """
-        x = self.features(x)
-
-        # 从四维特征图展开为二维矩阵
-        # (N, 16, 5, 5) -> (N, 400)
-        x = torch.flatten(x, start_dim=1)
-
-        logits = self.classifier(x)
-
-        return logits
+        return self.network(x)
 
 
 def train_one_epoch(
@@ -105,46 +70,34 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
 ) -> tuple[float, float]:
-    """训练一个 epoch。"""
-
-    model.train()
+    """训练一个epoch"""
+    model.train()  # 网络切换到训练模式，当有dropout的时候一定要写
 
     total_loss = 0.0
     correct = 0
     total = 0
 
-    for images, labels in data_loader:
+    for images, labels in data_loader:  # dataloader把数据分批送入网络，这里表示一个批次
         images = images.to(device)
-        labels = labels.to(device)
+        labels = labels.to(device)  # 数据也必须迁移到同一个设备：
 
-        # 清空上一次反向传播留下的梯度
-        optimizer.zero_grad()
+        optimizer.zero_grad()  # 一个batch是指使用这个batch计算累计梯度更新参数
+        # 因此每个batch开始之前先清空梯度
 
-        # 前向传播
-        logits = model(images)
+        logits = model(images)  # 前向传播
 
-        # 计算交叉熵损失
-        loss = criterion(logits, labels)
+        loss = criterion(logits, labels)  # 计算损失
 
-        # 反向传播，计算梯度
-        loss.backward()
+        loss.backward()  # 反向传播计算梯度，存入parameter.grad
 
-        # 更新参数
-        optimizer.step()
+        optimizer.step()  # 读取parameter.grad，更新参数
 
         batch_size = labels.size(0)
+        total_loss += loss.item() * batch_size  # loss.item把只包含一个数的 Tensor 转换成 Python 数值
 
-        total_loss += loss.item() * batch_size
+        predictions = torch.argmax(logits, dim=1)
 
-        predictions = torch.argmax(
-            logits,
-            dim=1,
-        )
-
-        correct += (
-            predictions == labels
-        ).sum().item()
-
+        correct += (predictions == labels).sum().item()
         total += batch_size
 
     average_loss = total_loss / total
@@ -153,16 +106,15 @@ def train_one_epoch(
     return average_loss, accuracy
 
 
-@torch.no_grad()
+@torch.no_grad()   # 整个函数中关闭梯度记录
 def evaluate(
-    model: nn.Module,
-    data_loader: DataLoader,
-    criterion: nn.Module,
-    device: torch.device,
-) -> tuple[float, float]:
-    """在测试集上评估模型。"""
-
-    model.eval()
+        model: nn.Module,
+        data_loader: DataLoader,
+        criterion: nn.Module,
+        device: torch.device
+) -> float:
+    """评估模型"""
+    model.eval()  # 模型切换到评估模式
 
     total_loss = 0.0
     correct = 0
@@ -176,25 +128,17 @@ def evaluate(
         loss = criterion(logits, labels)
 
         batch_size = labels.size(0)
-
         total_loss += loss.item() * batch_size
 
-        predictions = torch.argmax(
-            logits,
-            dim=1,
-        )
+        predictions = torch.argmax(logits, dim=1)
 
-        correct += (
-            predictions == labels
-        ).sum().item()
-
+        correct += (predictions == labels).sum().item()
         total += batch_size
 
     average_loss = total_loss / total
     accuracy = correct / total
 
     return average_loss, accuracy
-
 
 @torch.no_grad()
 def show_predictions(
@@ -203,7 +147,7 @@ def show_predictions(
     device: torch.device,
     count: int = 10,
 ) -> None:
-    """打印一批测试样本的预测结果。"""
+    """查看部分测试样本的预测结果"""
 
     model.eval()
 
@@ -214,20 +158,11 @@ def show_predictions(
 
     logits = model(images)
 
-    probabilities = torch.softmax(
-        logits,
-        dim=1,
-    )
+    probabilities = torch.softmax(logits, dim=1)
 
-    predictions = torch.argmax(
-        probabilities,
-        dim=1,
-    )
+    predictions = torch.argmax(probabilities, dim=1)
 
-    confidences = torch.max(
-        probabilities,
-        dim=1,
-    ).values
+    confidences = torch.max(logits, dim=1).values
 
     for index in range(count):
         print(
@@ -241,38 +176,28 @@ def show_predictions(
 def main() -> None:
     set_seed(42)
 
-    # 自动选择 GPU 或 CPU
-    device = torch.device(
-        "cuda"
-        if torch.cuda.is_available()
-        else "cpu"
-    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print("使用设备：", device)
 
-    # MNIST原始像素范围为[0, 1]
-    # Normalize将其近似标准化
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-
-        transforms.Normalize(
+    transform = transforms.Compose([  # 按照顺序执行多个数据变换
+        transforms.ToTensor(),  # 图片转换为pytorch tensor，像素从0-255转为0-1
+        transforms.Normalize(  # 对像素进行标准化
             mean=(0.1307,),
             std=(0.3081,),
         ),
     ])
 
-    data_root = "./data"
-
     train_dataset = datasets.MNIST(
-        root=data_root,
+        root="./data",
         train=True,
         transform=transform,
         download=True,
-    )
+    )  # 加载训练集
 
     test_dataset = datasets.MNIST(
-        root=data_root,
-        train=False,
+        root="./data",
+        train=False,  # 表示加载测试集
         transform=transform,
         download=True,
     )
@@ -281,8 +206,8 @@ def main() -> None:
         train_dataset,
         batch_size=64,
         shuffle=True,
-        num_workers=0,
-    )
+        num_workers=0, # 表示由主进程加载数据
+    )  # Dataloader的作用是：把数据集分批送入网络
 
     test_loader = DataLoader(
         test_dataset,
@@ -291,18 +216,16 @@ def main() -> None:
         num_workers=0,
     )
 
-    model = LeNet().to(device)
+    model = MLP().to(device)  # 模型放到对应设备，数据也必须迁移到同一个单位
 
-    # CrossEntropyLoss内部已经完成了
-    # LogSoftmax + Negative Log Likelihood
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss()  # 多分类任务使用交叉熵损失函数
 
     optimizer = torch.optim.Adam(
-        model.parameters(),
+        model.parameters(),  # 返回模型中所有需要训练的参数
         lr=0.001,
-    )
+    )  # 优化器利用梯度更新参数
 
-    epochs = 5
+    epochs = 10
 
     for epoch in range(1, epochs + 1):
         train_loss, train_accuracy = train_one_epoch(
@@ -328,8 +251,7 @@ def main() -> None:
             f"测试准确率={test_accuracy:.4%}"
         )
 
-    # 保存模型参数
-    model_path = "lenet_mnist.pth"
+    model_path = "mlp_mnist.pth"
 
     torch.save(
         model.state_dict(),
