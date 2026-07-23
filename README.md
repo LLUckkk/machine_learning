@@ -13,4 +13,4 @@ codes of ML, with reference to 西瓜书
 
 ## Neural Network 神经网络
 + 标准BP和累计BP比较
-+ 卷积神经网络识别手写字符
++ 卷积神经网络识别手写字符，mlp写法和cnn写法
