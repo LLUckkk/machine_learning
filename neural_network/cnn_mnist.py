@@ -24,6 +24,11 @@ class LeNet(nn.Module):
 
     输入：
         (batch_size, 1, 28, 28)
+        这里的1表示1个灰度通道 channel
+        灰度图每个位置只有一个数表示像素颜色，所以是一个通道
+        彩色图一般有三个通道，RGB
+
+        cnn并不像mlp一样直接将二维展开，而是先保留二维结构
 
     网络结构：
         卷积 -> ReLU -> 池化
@@ -39,19 +44,19 @@ class LeNet(nn.Module):
             # 输入：(N, 1, 28, 28)
             nn.Conv2d(
                 in_channels=1,
-                out_channels=6,
-                kernel_size=5,
+                out_channels=6,  # 6个卷积核，自己指定outchannels
+                kernel_size=5,  # 5*5的卷积核，遍历图片矩阵，对应位置元素相乘并相加，得到一个特征map
                 stride=1,
                 padding=2,
             ),
-            # 输出：(N, 6, 28, 28)
+            # 输出：(N, 6, 28, 28) 得到6张特征图，此时六个特征图同样的位置共同决定了原图对应位置的像素，所以变成了6个通道
             nn.ReLU(),
 
             nn.MaxPool2d(
                 kernel_size=2,
                 stride=2,
             ),
-            # 输出：(N, 6, 14, 14)
+            # 输出：(N, 6, 14, 14) 每个2*2区域压缩为取最大值
 
             nn.Conv2d(
                 in_channels=6,
